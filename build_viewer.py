@@ -12,6 +12,13 @@ CHUNK_SIZE = 256
 READ_SIZE = 1024 * 1024
 
 
+def ingredient_index_shard(key):
+    value = 0
+    for character in key:
+        value = (value * 31 + ord(character)) % 128
+    return f"{value:02x}"
+
+
 def json_array(path):
     decoder = json.JSONDecoder()
     with open(path, "r", encoding="utf-8") as source:
@@ -148,6 +155,14 @@ def main():
     del source_index
 
     os.makedirs(OUTPUT, exist_ok=True)
+    legacy_ingredient_index = os.path.join(OUTPUT, "ingredient-index.json.gz")
+    if os.path.isfile(legacy_ingredient_index):
+        os.remove(legacy_ingredient_index)
+    ingredient_index_root = os.path.join(OUTPUT, "ingredient-index")
+    if os.path.isdir(ingredient_index_root):
+        for filename in os.listdir(ingredient_index_root):
+            if filename.endswith(".json.gz"):
+                os.remove(os.path.join(ingredient_index_root, filename))
     for path in (
         os.path.join(OUTPUT, "catalog.json"),
         os.path.join(OUTPUT, "recipe-index.json"),
@@ -176,6 +191,7 @@ def main():
     del item_rows, mob_rows, recipe_refs, catalog
 
     total_recipes = 0
+    ingredient_refs = {}
     for category_index, category in enumerate(categories):
         recipe_file = os.path.join(BASE, category["dir"], "recipes.json")
         if not os.path.isfile(recipe_file):
@@ -185,6 +201,17 @@ def main():
         chunk = []
         recipe_index = 0
         for recipe in json_array(recipe_file):
+            seen_ingredients = set()
+            for group in recipe.get("in") or []:
+                for ingredient in group or []:
+                    if not ingredient or not isinstance(ingredient[0], str):
+                        continue
+                    key = ingredient[0]
+                    if key not in seen_ingredients:
+                        shard = ingredient_index_shard(key)
+                        shard_refs = ingredient_refs.setdefault(shard, {})
+                        shard_refs.setdefault(key, []).append([category_index, recipe_index])
+                        seen_ingredients.add(key)
             chunk.append(recipe)
             recipe_index += 1
             if len(chunk) == CHUNK_SIZE:
@@ -203,6 +230,13 @@ def main():
             return 1
         total_recipes += recipe_index
         print(f"[{category_index + 1}/{len(categories)}] {category['title']}: {recipe_index:,} recipes")
+
+    os.makedirs(ingredient_index_root, exist_ok=True)
+    for shard, refs in sorted(ingredient_refs.items()):
+        write_gzip_json(os.path.join(ingredient_index_root, f"{shard}.json.gz"), refs)
+    indexed_items = sum(len(refs) for refs in ingredient_refs.values())
+    print(f"Prepared ingredient indexes for {indexed_items:,} items in {len(ingredient_refs)} shards")
+    del ingredient_refs
 
     expected_recipes = manifest.get("counts", {}).get("recipes")
     if expected_recipes is not None and total_recipes != expected_recipes:

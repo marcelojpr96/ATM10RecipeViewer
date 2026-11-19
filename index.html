@@ -143,13 +143,14 @@
           <section class="resource-breakdown" aria-labelledby="resource-breakdown-title">
             <div class="resource-section-heading">
               <h2 id="resource-breakdown-title">Recipe breakdown</h2>
-              <p>Use “Show tree” to reveal an item’s ingredients.</p>
+              <p>Hide this view without changing what you need.</p>
+              <button id="resource-breakdown-toggle" class="button secondary resource-breakdown-toggle" type="button" aria-expanded="true" aria-controls="resource-tree-list">Hide breakdown</button>
             </div>
             <div id="resource-tree-list" class="resource-tree-list"></div>
           </section>
           <div class="resource-section-heading resource-totals-heading">
-            <h2>Collected resource totals</h2>
-            <p>These totals avoid counting an item and its ingredients twice.</p>
+            <h2>Resources to gather</h2>
+            <p>The main item and its needed materials count toward progress.</p>
           </div>
         <div id="resource-list" class="resource-list">
           <div class="empty-state compact"><span class="empty-symbol" aria-hidden="true">▤</span><strong>No totals yet</strong><span>Build a recipe tree to see the items you need, including recipes you have not expanded.</span></div>
