@@ -67,9 +67,14 @@ def json_array(path):
 
 
 def write_gzip_json(path, value):
+    payload = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if os.path.isfile(path):
+        with gzip.open(path, "rb") as source:
+            if source.read() == payload:
+                return
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with gzip.open(path, "wt", encoding="utf-8", newline="\n", compresslevel=6) as destination:
-        json.dump(value, destination, ensure_ascii=False, separators=(",", ":"))
+    with open(path, "wb") as destination:
+        destination.write(gzip.compress(payload, compresslevel=6, mtime=0))
 
 
 def find_recipe_image_probe(categories):
@@ -87,6 +92,7 @@ def main():
     required = [
         os.path.join(BASE, "manifest.json"),
         os.path.join(BASE, "items.json"),
+        os.path.join(BASE, "mobs.json"),
         os.path.join(BASE, "index.json"),
         os.path.join(BASE, "categories.json"),
     ]
@@ -113,6 +119,24 @@ def main():
                 item.get("m") or item["k"].split("|")[-1].split(":")[0],
                 item.get("icon") or "",
             ])
+
+    with open(os.path.join(BASE, "mobs.json"), encoding="utf-8") as source:
+        mob_rows = [
+            {
+                "id": mob["id"],
+                "name": mob.get("n") or mob["id"],
+                "mod": mob.get("m") or "",
+                "icon": mob.get("icon") or "",
+                "frames": mob.get("frames") or 1,
+                "fps": mob.get("fps") or 1,
+                "width": mob.get("w"),
+                "height": mob.get("h"),
+                "health": mob.get("hp"),
+                "category": mob.get("cat") or "",
+                "drops": mob.get("drops") or [],
+            }
+            for mob in json.load(source)["mobs"]
+        ]
 
     with open(os.path.join(BASE, "index.json"), encoding="utf-8") as source:
         source_index = json.load(source)
@@ -144,11 +168,12 @@ def main():
         "mods": manifest.get("mods", {}),
         "categories": categories,
         "items": item_rows,
+        "mobs": mob_rows,
         "recipeImageProbe": find_recipe_image_probe(categories),
     }
     write_gzip_json(os.path.join(OUTPUT, "catalog.json.gz"), catalog)
     write_gzip_json(os.path.join(OUTPUT, "recipe-index.json.gz"), recipe_refs)
-    del item_rows, recipe_refs, catalog
+    del item_rows, mob_rows, recipe_refs, catalog
 
     total_recipes = 0
     for category_index, category in enumerate(categories):

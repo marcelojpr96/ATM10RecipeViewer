@@ -6,21 +6,26 @@
     <meta name="theme-color" content="#111713">
     <meta name="description" content="A private, locally hosted recipe viewer for your JEI export.">
     <title>Recipe Tree</title>
-    <link rel="stylesheet" href="./styles.css?v=12">
+    <link rel="stylesheet" href="./styles.css?v=13">
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="./" aria-label="Recipe Tree home">
-        <span class="brand-mark" aria-hidden="true">✦</span>
-        <span>Recipe<span class="brand-light">Tree</span></span>
-      </a>
+      <div class="brand-group">
+        <button id="nav-button" class="brand-mark nav-button" type="button" aria-label="Open navigation menu" aria-expanded="false" aria-controls="main-nav">✦</button>
+        <button id="home-button" class="brand" type="button">Recipe<span class="brand-light">Tree</span></button>
+      </div>
       <div class="pack-badge" aria-label="Loaded modpack">
         <span class="pack-dot" aria-hidden="true"></span>
         <span class="pack-copy"><strong id="pack-name">Loading modpack…</strong><small id="pack-version"></small></span>
         <span class="pack-lock" title="Loaded from your JEI export">LOCAL</span>
       </div>
-      <button id="settings-button" class="settings-button" type="button" aria-label="Open settings" aria-expanded="false" aria-controls="settings-menu">⚙</button>
     </header>
+
+    <nav id="main-nav" class="main-nav" aria-label="Main navigation" hidden>
+      <button type="button" data-page="items">Items</button>
+      <button type="button" data-page="mobs">Mobs</button>
+      <button type="button" data-page="settings">Settings</button>
+    </nav>
 
     <div id="settings-menu" class="settings-menu" role="region" aria-label="Settings" hidden>
       <div class="settings-heading"><strong>Settings</strong><button class="icon-button" id="close-settings" type="button" aria-label="Close settings">×</button></div>
@@ -39,7 +44,7 @@
       </div>
     </div>
 
-    <nav class="tabs" aria-label="Recipe viewer sections">
+    <nav id="section-tabs" class="tabs" aria-label="Item viewer sections" hidden>
       <button class="tab active" data-view="items" type="button">Items</button>
       <button class="tab" data-view="favorites" type="button">Favorites <span id="favorites-count" class="tab-count">0</span></button>
       <button class="tab" data-view="tree" type="button">Recipe tree</button>
@@ -51,6 +56,46 @@
     <main>
       <div class="notice" id="app-notice" role="status" hidden></div>
 
+      <section id="home-page" class="page-view home-page">
+        <div class="home-stage">
+          <div id="home-carousels" class="home-carousels" aria-hidden="true">
+            <div class="home-carousel-row"><div class="home-carousel-track"></div></div>
+            <div class="home-carousel-row"><div class="home-carousel-track"></div></div>
+            <div class="home-carousel-row"><div class="home-carousel-track"></div></div>
+            <div class="home-carousel-row"><div class="home-carousel-track"></div></div>
+          </div>
+          <div class="home-center">
+            <span class="home-mark" aria-hidden="true">✦</span>
+            <h1>Recipe<span class="brand-light">Tree</span></h1>
+            <p>Explore the items, recipes, and creatures in your modpack.</p>
+            <div class="home-actions">
+              <button class="button primary" type="button" data-page="items">Browse items</button>
+              <button class="button secondary" type="button" data-page="mobs">Browse mobs</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="mobs-page" class="page-view mobs-page" hidden>
+        <div class="catalog-toolbar">
+          <label class="search-box">
+            <span class="search-icon" aria-hidden="true">⌕</span>
+            <span class="sr-only">Search mobs</span>
+            <input id="mob-search-input" type="search" placeholder="Search mobs by name, ID, or mod…" autocomplete="off" disabled>
+          </label>
+          <label class="filter-label">
+            <span class="sr-only">Filter mobs by mod</span>
+            <select id="mob-mod-filter" disabled><option value="">All mods</option></select>
+          </label>
+        </div>
+        <div class="results-heading">
+          <div><h1>Mob catalog</h1><p id="mob-results-count">Preparing mob data…</p></div>
+        </div>
+        <div id="mob-grid" class="item-grid" aria-live="polite"></div>
+        <div class="load-more-wrap"><button id="mob-load-more" class="button secondary" type="button" hidden>Show more mobs</button></div>
+      </section>
+
+      <div id="items-page" class="page-view" hidden>
       <section id="items-view" class="view">
         <div class="catalog-toolbar">
           <label class="search-box">
@@ -114,17 +159,18 @@
           <div class="empty-state compact"><span class="empty-symbol" aria-hidden="true">▤</span><strong>No totals yet</strong><span>Build a recipe tree to see the items you need, including recipes you have not expanded.</span></div>
         </div>
       </section>
+      </div>
     </main>
 
     <aside id="item-panel" class="item-panel" aria-label="Item details" aria-hidden="true">
       <div class="panel-backdrop" data-close-panel></div>
       <div class="panel-content">
-        <div class="panel-header"><span class="eyebrow">ITEM DETAILS</span><button class="icon-button" type="button" aria-label="Close item details" data-close-panel>×</button></div>
+        <div class="panel-header"><span id="panel-title" class="eyebrow">ITEM DETAILS</span><button class="icon-button" type="button" aria-label="Close details" data-close-panel>×</button></div>
         <div id="item-details"></div>
       </div>
     </aside>
 
     <footer><span>Recipe Tree</span><span id="footer-counts"></span></footer>
-    <script src="./app.js?v=13" defer></script>
+    <script src="./app.js?v=14" defer></script>
   </body>
 </html>

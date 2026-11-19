@@ -17,6 +17,7 @@
     imageProbe: Promise.resolve(false),
     recipeImagesAvailable: false,
     items: [],
+    mobs: [],
     itemByKey: new Map(),
     favorites: new Set(),
     collectedResources: new Map(),
@@ -25,8 +26,11 @@
     categoryByIndex: [],
     chunks: new Map(),
     selectedItem: null,
+    selectedMob: null,
+    page: "home",
     view: "items",
     visibleCount: PAGE_SIZE,
+    visibleMobCount: PAGE_SIZE,
     tree: null,
     treeNodes: 0,
     nodeSequence: 0,
@@ -35,11 +39,16 @@
     treeTruncated: false,
     resources: [],
     resourcesComplete: false,
-    searchTimer: 0
+    searchTimer: 0,
+    mobSearchTimer: 0
   };
 
   const els = {
     notice: $("#app-notice"),
+    navButton: $("#nav-button"),
+    navMenu: $("#main-nav"),
+    homeButton: $("#home-button"),
+    sectionTabs: $("#section-tabs"),
     search: $("#search-input"),
     modFilter: $("#mod-filter"),
     grid: $("#item-grid"),
@@ -62,7 +71,12 @@
     exportResources: $("#export-resources"),
     catalogTitle: $("#catalog-title"),
     favoritesCount: $("#favorites-count"),
-    settingsButton: $("#settings-button"),
+    mobSearch: $("#mob-search-input"),
+    mobModFilter: $("#mob-mod-filter"),
+    mobGrid: $("#mob-grid"),
+    mobResultsCount: $("#mob-results-count"),
+    mobLoadMore: $("#mob-load-more"),
+    panelTitle: $("#panel-title"),
     settingsMenu: $("#settings-menu"),
     themeToggle: $("#theme-toggle"),
     favoritesFile: $("#favorites-file")
@@ -106,8 +120,43 @@
     els.notice.textContent = message;
   }
 
+  function closeMainNav() {
+    els.navMenu.hidden = true;
+    els.navButton.setAttribute("aria-expanded", "false");
+  }
+
+  function openSettings() {
+    closeMainNav();
+    els.settingsMenu.hidden = false;
+  }
+
+  function setPage(page) {
+    if (page === "settings") {
+      openSettings();
+      return;
+    }
+    if (state.page !== page) closePanel();
+    state.page = page;
+    document.querySelectorAll(".page-view").forEach((section) => {
+      section.hidden = section.id !== `${page}-page`;
+    });
+    els.sectionTabs.hidden = page !== "items";
+    closeMainNav();
+    if (page === "items") {
+      setView("items");
+    } else if (page === "mobs") {
+      renderMobs(true);
+    }
+  }
+
   function setView(view) {
+    if (state.page !== "items") closePanel();
+    state.page = "items";
     state.view = view;
+    document.querySelectorAll(".page-view").forEach((section) => {
+      section.hidden = section.id !== "items-page";
+    });
+    els.sectionTabs.hidden = false;
     document.querySelectorAll(".tab").forEach((tab) => {
       const active = tab.dataset.view === view;
       tab.classList.toggle("active", active);
@@ -277,6 +326,109 @@
     return state.catalog.mods?.[mod] || mod;
   }
 
+  function mobSpriteHtml(mob, className = "") {
+    const frames = Math.max(1, Math.floor(Number(mob.frames) || 1));
+    const fps = Math.max(0.1, Number(mob.fps) || 1);
+    const src = mob.icon ? `${EXPORT_ROOT}${mob.icon}` : "";
+    if (!src) return `<span class="mob-sprite ${className} mob-sprite-fallback" aria-hidden="true">◇</span>`;
+    return `<span class="mob-sprite ${className}" role="img" aria-label="${escapeHtml(mob.name)}" style="--sprite-image: url('${escapeHtml(src)}'); --sprite-frames: ${frames}; --sprite-width: ${frames * 100}%; --sprite-duration: ${frames / fps}s;"></span>`;
+  }
+
+  function buildMobModFilter() {
+    const mods = [...new Set(state.mobs.map((mob) => mob.mod).filter(Boolean))]
+      .sort((a, b) => modName(a).localeCompare(modName(b)));
+    const fragment = document.createDocumentFragment();
+    for (const mod of mods) {
+      const option = document.createElement("option");
+      option.value = mod;
+      option.textContent = modName(mod);
+      fragment.append(option);
+    }
+    els.mobModFilter.append(fragment);
+    els.mobSearch.disabled = false;
+    els.mobModFilter.disabled = false;
+  }
+
+  function renderMobs(reset = false) {
+    if (!state.catalog) return;
+    if (reset) state.visibleMobCount = PAGE_SIZE;
+    const queryTerms = els.mobSearch.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    const modTerms = queryTerms.filter((term) => term.startsWith("@")).map((term) => term.slice(1));
+    const mobTerms = queryTerms.filter((term) => !term.startsWith("@"));
+    const selectedMod = els.mobModFilter.value;
+    const matches = state.mobs.filter((mob) => {
+      if (selectedMod && mob.mod !== selectedMod) return false;
+      const modText = `${mob.mod} ${modName(mob.mod)}`.toLocaleLowerCase();
+      if (modTerms.some((term) => !modText.includes(term))) return false;
+      const mobText = `${mob.name} ${mob.id} ${mob.category || ""} ${modName(mob.mod)}`.toLocaleLowerCase();
+      return mobTerms.every((term) => mobText.includes(term));
+    }).sort((a, b) => a.name.localeCompare(b.name));
+    const shown = matches.slice(0, state.visibleMobCount);
+    const fragment = document.createDocumentFragment();
+    for (const mob of shown) {
+      const card = document.createElement("article");
+      card.className = "item-card";
+      card.innerHTML = `<button class="item-card-open mob-card-open" type="button" data-mob-id="${escapeHtml(mob.id)}" aria-label="Open ${escapeHtml(mob.name)}, ${escapeHtml(modName(mob.mod))}">${mobSpriteHtml(mob, "mob-card-sprite")}<span class="item-card-name">${escapeHtml(mob.name)}</span><span class="item-card-mod">${escapeHtml(modName(mob.mod))}</span></button>`;
+      fragment.append(card);
+    }
+    if (matches.length === 0) {
+      els.mobGrid.innerHTML = `<div class="empty-state compact item-grid-empty"><span class="empty-symbol" aria-hidden="true">◇</span><strong>No matching mobs</strong><span>Try a different name, ID, or mod filter.</span></div>`;
+    } else {
+      els.mobGrid.replaceChildren(fragment);
+    }
+    els.mobResultsCount.textContent = queryTerms.length || selectedMod
+      ? `${shown.length.toLocaleString()} of ${matches.length.toLocaleString()} matching mobs`
+      : `${state.mobs.length.toLocaleString()} mobs · showing ${shown.length.toLocaleString()}`;
+    els.mobLoadMore.hidden = shown.length >= matches.length;
+    els.mobLoadMore.textContent = `Show ${Math.min(PAGE_SIZE, matches.length - shown.length).toLocaleString()} more mobs`;
+  }
+
+  function renderHomeCarousels() {
+    const itemCandidates = state.items.filter((item) => item[3]);
+    const mobCandidates = state.mobs.filter((mob) => mob.icon);
+    document.querySelectorAll(".home-carousel-row").forEach((row, rowIndex) => {
+      const cards = [];
+      for (let index = 0; index < 14; index++) {
+        if ((index + rowIndex) % 4 === 1 && mobCandidates.length) {
+          const mob = mobCandidates[(rowIndex * 13 + index * 3) % mobCandidates.length];
+          cards.push(`<span class="home-carousel-card" title="${escapeHtml(mob.name)}">${mobSpriteHtml(mob, "home-carousel-mob")}</span>`);
+        } else if (itemCandidates.length) {
+          const item = itemCandidates[(rowIndex * 19 + index * 7) % itemCandidates.length];
+          cards.push(`<span class="home-carousel-card" title="${escapeHtml(item[1])}">${itemIcon(item[0], "home-carousel-item")}</span>`);
+        }
+      }
+      const track = row.querySelector(".home-carousel-track");
+      const sequence = cards.join("");
+      track.innerHTML = sequence + sequence;
+      row.dataset.direction = rowIndex % 2 === 0 ? "left" : "right";
+    });
+  }
+
+  function openMob(mobId) {
+    const mob = state.mobs.find((entry) => entry.id === mobId);
+    if (!mob) return;
+    closePanel();
+    state.selectedMob = mob.id;
+    els.panelTitle.textContent = "MOB DETAILS";
+    els.panel.setAttribute("aria-label", "Mob details");
+    const health = Number.isFinite(Number(mob.health)) ? `${Number(mob.health).toLocaleString()} HP` : "Unknown";
+    const dimensions = Number.isFinite(Number(mob.width)) && Number.isFinite(Number(mob.height))
+      ? `${Number(mob.width).toLocaleString(undefined, { maximumFractionDigits: 2 })} × ${Number(mob.height).toLocaleString(undefined, { maximumFractionDigits: 2 })} blocks`
+      : "Unknown";
+    const drops = mob.drops || [];
+    const dropRows = drops.length
+      ? drops.map((drop) => {
+        const key = drop.k;
+        const amount = drop.min === drop.max ? `${drop.min}` : `${drop.min ?? 1}–${drop.max ?? "?"}`;
+        const chance = Number.isFinite(Number(drop.c)) ? ` · ${(Number(drop.c) * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}% chance` : "";
+        const average = Number.isFinite(Number(drop.avg)) ? ` · ${Number(drop.avg).toLocaleString(undefined, { maximumFractionDigits: 2 })} avg.` : "";
+        return `<button class="mob-drop-row" type="button" data-item-key="${escapeHtml(key)}">${itemIcon(key, "mob-drop-icon")}<span class="mob-drop-copy"><strong>${escapeHtml(itemName(key))}</strong><small>${escapeHtml(amount)} per drop${escapeHtml(chance)}${escapeHtml(average)}</small></span><span class="mob-drop-link" aria-hidden="true">↗</span></button>`;
+      }).join("")
+      : `<p class="panel-empty">No drops were included in this export.</p>`;
+    els.details.innerHTML = `<div class="detail-hero mob-detail-hero">${mobSpriteHtml(mob, "detail-mob-sprite")}<div class="detail-title"><h2>${escapeHtml(mob.name)}</h2><p>${escapeHtml(mob.id)}</p><span class="detail-mod">${escapeHtml(modName(mob.mod))}</span></div></div><div class="mob-stats-grid"><div class="mob-stat"><span>Health</span><strong>${escapeHtml(health)}</strong></div><div class="mob-stat"><span>Size</span><strong>${escapeHtml(dimensions)}</strong></div><div class="mob-stat"><span>Category</span><strong>${escapeHtml(mob.category || "Unknown")}</strong></div></div><div class="panel-subheading"><h3>Drops</h3><span>${drops.length.toLocaleString()} listed</span></div><div class="mob-drop-list">${dropRows}</div>`;
+    showPanel();
+  }
+
   function renderItems(reset = false) {
     if (!state.catalog) return;
     if (reset) state.visibleCount = PAGE_SIZE;
@@ -378,10 +530,16 @@
     els.panel.classList.remove("open");
     els.panel.setAttribute("aria-hidden", "true");
     document.body.classList.remove("panel-open");
+    state.selectedItem = null;
+    state.selectedMob = null;
   }
 
   async function openItem(key) {
+    if (state.page !== "items") setPage("items");
+    state.selectedMob = null;
     state.selectedItem = key;
+    els.panelTitle.textContent = "ITEM DETAILS";
+    els.panel.setAttribute("aria-label", "Item details");
     const item = itemFor(key);
     const name = itemName(key);
     const mod = item ? modName(item[2]) : key.split("|")[0];
@@ -811,12 +969,39 @@
 
   function bindEvents() {
     document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => setView(tab.dataset.view)));
-    document.querySelector("[data-go-items]").addEventListener("click", () => setView("items"));
+    document.querySelector("[data-go-items]").addEventListener("click", () => setPage("items"));
+    els.homeButton.addEventListener("click", () => setPage("home"));
+    els.navButton.addEventListener("click", () => {
+      els.settingsMenu.hidden = true;
+      const opening = els.navMenu.hidden;
+      els.navMenu.hidden = !opening;
+      els.navButton.setAttribute("aria-expanded", String(opening));
+    });
+    els.navMenu.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-page]");
+      if (button) setPage(button.dataset.page);
+    });
+    document.querySelectorAll("#home-page [data-page]").forEach((button) => {
+      button.addEventListener("click", () => setPage(button.dataset.page));
+    });
     els.search.addEventListener("input", () => {
       window.clearTimeout(state.searchTimer);
       state.searchTimer = window.setTimeout(() => renderItems(true), 100);
     });
     els.modFilter.addEventListener("change", () => renderItems(true));
+    els.mobSearch.addEventListener("input", () => {
+      window.clearTimeout(state.mobSearchTimer);
+      state.mobSearchTimer = window.setTimeout(() => renderMobs(true), 100);
+    });
+    els.mobModFilter.addEventListener("change", () => renderMobs(true));
+    els.mobGrid.addEventListener("click", (event) => {
+      const card = event.target.closest("[data-mob-id]");
+      if (card) openMob(card.dataset.mobId);
+    });
+    els.mobLoadMore.addEventListener("click", () => {
+      state.visibleMobCount += PAGE_SIZE;
+      renderMobs();
+    });
     els.grid.addEventListener("click", (event) => {
       const favoriteButton = event.target.closest("[data-favorite-key]");
       if (favoriteButton) {
@@ -987,14 +1172,8 @@
     els.expandTree.addEventListener("click", expandAll);
     els.collapseTree.addEventListener("click", collapseAll);
     els.exportResources.addEventListener("click", exportResources);
-    els.settingsButton.addEventListener("click", () => {
-      const opening = els.settingsMenu.hidden;
-      els.settingsMenu.hidden = !opening;
-      els.settingsButton.setAttribute("aria-expanded", String(opening));
-    });
     $("#close-settings").addEventListener("click", () => {
       els.settingsMenu.hidden = true;
-      els.settingsButton.setAttribute("aria-expanded", "false");
     });
     els.themeToggle.addEventListener("click", () => applyTheme(state.theme === "dark" ? "light" : "dark"));
     $("#export-favorites").addEventListener("click", exportFavorites);
@@ -1003,9 +1182,10 @@
       if (els.favoritesFile.files?.[0]) importFavorites(els.favoritesFile.files[0]);
     });
     document.addEventListener("click", (event) => {
-      if (els.settingsMenu.hidden || event.target.closest("#settings-menu, #settings-button")) return;
-      els.settingsMenu.hidden = true;
-      els.settingsButton.setAttribute("aria-expanded", "false");
+      if (!els.settingsMenu.hidden && !event.target.closest("#settings-menu, #main-nav")) {
+        els.settingsMenu.hidden = true;
+      }
+      if (!els.navMenu.hidden && !event.target.closest("#main-nav, #nav-button")) closeMainNav();
     });
     document.addEventListener("keydown", (event) => {
       if (event.key === "/" && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) {
@@ -1016,7 +1196,7 @@
       if (event.key === "Escape") {
         closePanel();
         els.settingsMenu.hidden = true;
-        els.settingsButton.setAttribute("aria-expanded", "false");
+        closeMainNav();
       }
     });
   }
@@ -1024,9 +1204,10 @@
   async function start() {
     bindEvents();
     try {
-      state.catalog = await fetchGzipJson(`${VIEWER_ROOT}catalog.json.gz`);
+      state.catalog = await fetchGzipJson(`${VIEWER_ROOT}catalog.json.gz?v=2`);
       state.categoryByIndex = state.catalog.categories;
       state.items = state.catalog.items;
+      state.mobs = state.catalog.mobs || [];
       state.itemByKey = new Map(state.items.map((item) => [item[0], item]));
       loadSavedPreferences();
       state.imageProbe = state.catalog.recipeImageProbe
@@ -1035,15 +1216,19 @@
       $("#pack-name").textContent = state.catalog.pack?.name || "JEI export";
       $("#pack-version").textContent = state.catalog.pack?.version || "";
       $("#minecraft-version").textContent = state.catalog.minecraft ? `Minecraft ${state.catalog.minecraft}` : "";
-      $("#footer-counts").textContent = `${Number(state.catalog.counts?.items || state.items.length).toLocaleString()} items`;
+      $("#footer-counts").textContent = `${Number(state.catalog.counts?.items || state.items.length).toLocaleString()} items · ${state.mobs.length.toLocaleString()} mobs`;
       buildModFilter();
+      buildMobModFilter();
       els.search.disabled = false;
-      els.search.focus({ preventScroll: true });
       els.resultsCount.textContent = `${state.items.length.toLocaleString()} items`;
       renderItems(true);
+      renderMobs(true);
+      renderHomeCarousels();
+      setPage("home");
     } catch (error) {
       showNotice(`Unable to load the prepared JEI export. Run build_viewer.py from the project folder, then open this site through a local web server (for example: python -m http.server 8000). Details: ${error.message}`, true);
       els.resultsCount.textContent = "Export data is not ready";
+      els.mobResultsCount.textContent = "Mob data is not ready";
     }
   }
 
