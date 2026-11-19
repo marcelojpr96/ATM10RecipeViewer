@@ -1,0 +1,13 @@
+/__pycache__/
+*.py[cod]
+/jei-exports.zip
+/jei-exports/jei-exports/index.json
+/jei-exports/jei-exports/items.json
+/jei-exports/jei-exports/categories.json
+/jei-exports/jei-exports/manifest.json
+/jei-exports/jei-exports/blockdrops.json
+/jei-exports/jei-exports/mobs.json
+/jei-exports/jei-exports/failures.json
+/jei-exports/jei-exports/export-errors.json
+/jei-exports/jei-exports/recipes/**/recipes.json
+/jei-exports/jei-exports/recipes/**/*.png
