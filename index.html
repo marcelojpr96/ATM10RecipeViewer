@@ -6,12 +6,12 @@
     <meta name="theme-color" content="#111713">
     <meta name="description" content="A private, locally hosted recipe viewer for your JEI export.">
     <title>Recipe Tree</title>
-    <link rel="stylesheet" href="./styles.css?v=13">
+    <link rel="stylesheet" href="./styles.css?v=18">
   </head>
   <body>
     <header class="topbar">
       <div class="brand-group">
-        <button id="nav-button" class="brand-mark nav-button" type="button" aria-label="Open navigation menu" aria-expanded="false" aria-controls="main-nav">✦</button>
+        <button id="nav-button" class="brand-mark nav-button" type="button" aria-label="Open navigation menu" aria-expanded="false" aria-controls="main-nav"><span class="menu-icon" aria-hidden="true"><span></span><span></span><span></span></span></button>
         <button id="home-button" class="brand" type="button">Recipe<span class="brand-light">Tree</span></button>
       </div>
       <div class="pack-badge" aria-label="Loaded modpack">
@@ -59,10 +59,6 @@
       <section id="home-page" class="page-view home-page">
         <div class="home-stage">
           <div id="home-carousels" class="home-carousels" aria-hidden="true">
-            <div class="home-carousel-row"><div class="home-carousel-track"></div></div>
-            <div class="home-carousel-row"><div class="home-carousel-track"></div></div>
-            <div class="home-carousel-row"><div class="home-carousel-track"></div></div>
-            <div class="home-carousel-row"><div class="home-carousel-track"></div></div>
           </div>
           <div class="home-center">
             <span class="home-mark" aria-hidden="true">✦</span>
@@ -171,6 +167,6 @@
     </aside>
 
     <footer><span>Recipe Tree</span><span id="footer-counts"></span></footer>
-    <script src="./app.js?v=14" defer></script>
+    <script src="./app.js?v=18" defer></script>
   </body>
 </html>

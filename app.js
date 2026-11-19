@@ -40,7 +40,9 @@
     resources: [],
     resourcesComplete: false,
     searchTimer: 0,
-    mobSearchTimer: 0
+    mobSearchTimer: 0,
+    homeResizeTimer: 0,
+    homeLayoutKey: ""
   };
 
   const els = {
@@ -123,6 +125,7 @@
   function closeMainNav() {
     els.navMenu.hidden = true;
     els.navButton.setAttribute("aria-expanded", "false");
+    els.navButton.setAttribute("aria-label", "Open navigation menu");
   }
 
   function openSettings() {
@@ -146,6 +149,8 @@
       setView("items");
     } else if (page === "mobs") {
       renderMobs(true);
+    } else if (page === "home") {
+      renderHomeCarousels();
     }
   }
 
@@ -384,11 +389,31 @@
   }
 
   function renderHomeCarousels() {
+    if (!state.catalog) return;
     const itemCandidates = state.items.filter((item) => item[3]);
     const mobCandidates = state.mobs.filter((mob) => mob.icon);
-    document.querySelectorAll(".home-carousel-row").forEach((row, rowIndex) => {
+    const width = document.documentElement.clientWidth || window.innerWidth;
+    const height = document.documentElement.clientHeight || window.innerHeight;
+    const mobileLayout = width <= 760;
+    const minRows = mobileLayout ? 5 : height < 600 ? 3 : 5;
+    const rowCount = Math.max(minRows, Math.min(12, Math.floor(Math.min(width / 200, height / 100))));
+    const cardsPerRow = Math.max(14, Math.ceil(width / 78) + 2);
+    const layoutKey = `${rowCount}:${cardsPerRow}`;
+    if (state.homeLayoutKey === layoutKey) return;
+    state.homeLayoutKey = layoutKey;
+    const rows = document.createDocumentFragment();
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
+      const row = document.createElement("div");
+      row.className = "home-carousel-row";
+      row.dataset.direction = rowIndex % 2 === 0 ? "left" : "right";
+      const topOffset = mobileLayout ? 10 : 14;
+      const topSpan = mobileLayout ? 80 : 72;
+      row.style.setProperty("--row-top", `${topOffset + (rowIndex * topSpan) / (rowCount - 1)}%`);
+      row.style.setProperty("--scroll-duration", `${Math.max(45, width / 20)}s`);
+      const track = document.createElement("div");
+      track.className = "home-carousel-track";
       const cards = [];
-      for (let index = 0; index < 14; index++) {
+      for (let index = 0; index < cardsPerRow; index++) {
         if ((index + rowIndex) % 4 === 1 && mobCandidates.length) {
           const mob = mobCandidates[(rowIndex * 13 + index * 3) % mobCandidates.length];
           cards.push(`<span class="home-carousel-card" title="${escapeHtml(mob.name)}">${mobSpriteHtml(mob, "home-carousel-mob")}</span>`);
@@ -397,11 +422,12 @@
           cards.push(`<span class="home-carousel-card" title="${escapeHtml(item[1])}">${itemIcon(item[0], "home-carousel-item")}</span>`);
         }
       }
-      const track = row.querySelector(".home-carousel-track");
       const sequence = cards.join("");
       track.innerHTML = sequence + sequence;
-      row.dataset.direction = rowIndex % 2 === 0 ? "left" : "right";
-    });
+      row.append(track);
+      rows.append(row);
+    }
+    $("#home-carousels").replaceChildren(rows);
   }
 
   function openMob(mobId) {
@@ -968,6 +994,15 @@
   }
 
   function bindEvents() {
+    const refreshHomeCarousels = () => {
+      if (state.page !== "home") return;
+      window.clearTimeout(state.homeResizeTimer);
+      state.homeResizeTimer = window.setTimeout(renderHomeCarousels, 150);
+    };
+    window.addEventListener("resize", refreshHomeCarousels);
+    if (typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(refreshHomeCarousels).observe(document.documentElement);
+    }
     document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => setView(tab.dataset.view)));
     document.querySelector("[data-go-items]").addEventListener("click", () => setPage("items"));
     els.homeButton.addEventListener("click", () => setPage("home"));
@@ -976,6 +1011,7 @@
       const opening = els.navMenu.hidden;
       els.navMenu.hidden = !opening;
       els.navButton.setAttribute("aria-expanded", String(opening));
+      els.navButton.setAttribute("aria-label", `${opening ? "Close" : "Open"} navigation menu`);
     });
     els.navMenu.addEventListener("click", (event) => {
       const button = event.target.closest("[data-page]");
@@ -1223,7 +1259,6 @@
       els.resultsCount.textContent = `${state.items.length.toLocaleString()} items`;
       renderItems(true);
       renderMobs(true);
-      renderHomeCarousels();
       setPage("home");
     } catch (error) {
       showNotice(`Unable to load the prepared JEI export. Run build_viewer.py from the project folder, then open this site through a local web server (for example: python -m http.server 8000). Details: ${error.message}`, true);
