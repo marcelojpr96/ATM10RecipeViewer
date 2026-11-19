@@ -9,6 +9,7 @@
   const MAX_TREE_NODES = 2500;
   const FAVORITES_STORAGE_KEY = "recipe-tree:favorites:v1";
   const THEME_STORAGE_KEY = "recipe-tree:theme:v1";
+  const COLLECTED_RESOURCES_STORAGE_KEY = "recipe-tree:collected-resources:v1";
   const $ = (selector) => document.querySelector(selector);
 
   const state = {
@@ -18,6 +19,7 @@
     items: [],
     itemByKey: new Map(),
     favorites: new Set(),
+    collectedResources: new Map(),
     theme: "dark",
     recipeRefs: null,
     categoryByIndex: [],
@@ -50,8 +52,13 @@
     treeProgress: $("#tree-progress"),
     expandTree: $("#expand-tree"),
     collapseTree: $("#collapse-tree"),
+    resourceTreeList: $("#resource-tree-list"),
     resourceList: $("#resource-list"),
     resourceCaption: $("#resource-caption"),
+    resourceProgressPercent: $("#resource-progress-percent"),
+    resourceProgressCount: $("#resource-progress-count"),
+    resourceProgressBar: $("#resource-progress-bar"),
+    resourceProgressFill: $("#resource-progress-fill"),
     exportResources: $("#export-resources"),
     catalogTitle: $("#catalog-title"),
     favoritesCount: $("#favorites-count"),
@@ -134,6 +141,23 @@
     } catch (error) {
       showNotice(`Could not load saved settings: ${error.message}`, true);
       state.favorites.clear();
+    }
+    try {
+      const savedResources = localStorage.getItem(COLLECTED_RESOURCES_STORAGE_KEY);
+      if (savedResources) {
+        const savedEntries = JSON.parse(savedResources);
+        if (!savedEntries || typeof savedEntries !== "object" || Array.isArray(savedEntries)) {
+          throw new Error("Saved resource progress must be an item-to-amount map.");
+        }
+        const entries = Object.entries(savedEntries);
+        if (entries.some(([, amount]) => !Number.isSafeInteger(amount) || amount < 0)) {
+          throw new Error("Saved collected amounts must be non-negative whole numbers.");
+        }
+        state.collectedResources = new Map(entries.filter(([key, amount]) => state.itemByKey.has(key) && amount > 0));
+      }
+    } catch (error) {
+      showNotice(`Could not load saved resource progress: ${error.message}`, true);
+      state.collectedResources.clear();
     }
     applyTheme(theme, false);
     updateFavoritesCount();
@@ -684,9 +708,78 @@
       !(node.refs || state.recipeRefs?.[node.key] || []).length || node.expanded
     );
     els.exportResources.disabled = state.resources.length === 0;
+    updateResourceProgress();
+  }
+
+  function updateResourceProgress() {
+    let totalNeeded = 0;
+    let totalCollected = 0;
+    for (const [key, amount] of state.resources) {
+      const needed = Math.max(0, Number(amount) || 0);
+      const collected = Math.min(needed, Math.max(0, Number(state.collectedResources.get(key)) || 0));
+      totalNeeded += needed;
+      totalCollected += collected;
+    }
+    const percent = totalNeeded ? Math.round((totalCollected / totalNeeded) * 100) : 0;
+    els.resourceProgressPercent.textContent = `${percent}%`;
+    els.resourceProgressCount.textContent = totalNeeded
+      ? `${totalCollected.toLocaleString()} of ${totalNeeded.toLocaleString()} items collected`
+      : "Build a recipe tree to start tracking resources.";
+    els.resourceProgressBar.setAttribute("aria-valuenow", String(percent));
+    els.resourceProgressBar.setAttribute("aria-valuetext", `${percent}% collected`);
+    els.resourceProgressFill.style.width = `${percent}%`;
+  }
+
+  function setCollectedAmount(key, amount) {
+    const previous = state.collectedResources.get(key);
+    if (amount > 0) state.collectedResources.set(key, amount);
+    else state.collectedResources.delete(key);
+    try {
+      localStorage.setItem(COLLECTED_RESOURCES_STORAGE_KEY, JSON.stringify(Object.fromEntries(state.collectedResources)));
+    } catch (error) {
+      if (previous === undefined) state.collectedResources.delete(key);
+      else state.collectedResources.set(key, previous);
+      showNotice(`Could not save collected resources in this browser: ${error.message}`, true);
+      renderResources();
+      return;
+    }
+    showNotice("");
+    renderResources();
+  }
+
+  function resourceTreeNodeHtml(node) {
+    const loadedRefs = node.refs || state.recipeRefs?.[node.key] || [];
+    const hasRecipes = loadedRefs.length > 0;
+    const cyclic = node.ancestors.has(node.key);
+    const canToggleTree = node.expanded || (!node.asResource && !cyclic && node.depth < MAX_TREE_DEPTH && hasRecipes);
+    const preferredRef = state.recipeOverrides.get(node.key) || node.ref;
+    const recipeRef = preferredRef && loadedRefs.some(([category, index]) => category === preferredRef[0] && index === preferredRef[1])
+      ? preferredRef
+      : loadedRefs[0];
+    const recipeTitle = recipeRef ? state.categoryByIndex[recipeRef[0]]?.title : "";
+    const showTreeControl = hasRecipes && !node.asResource
+      ? `<label class="resource-tree-control"><input type="checkbox" data-show-tree-node="${node.id}" aria-label="Show recipe ingredients for ${escapeHtml(itemName(node.key))}" ${node.expanded ? "checked" : ""} ${canToggleTree ? "" : "disabled"}>Show tree</label>`
+      : "";
+    const children = node.children || [];
+    const childHtml = node.expanded && children.length
+      ? `<div class="resource-tree-children">${children.map((child) => resourceTreeNodeHtml(child)).join("")}</div>`
+      : "";
+    let note = "";
+    if (node.asResource) note = `<div class="resource-tree-note">Kept as a resource; recipe expansion is skipped.</div>`;
+    else if (cyclic) note = `<div class="resource-tree-note">Cycle detected; counted as a raw resource.</div>`;
+    else if (node.depth >= MAX_TREE_DEPTH && hasRecipes) note = `<div class="resource-tree-note">Depth limit reached.</div>`;
+    return `<div class="resource-tree-node" data-resource-node-id="${node.id}"><div class="resource-tree-row">${itemIcon(node.key, "resource-tree-icon")}<div class="resource-tree-item">${escapeHtml(itemName(node.key))}<small>${escapeHtml(itemId(node.key))}${recipeTitle ? ` · ${escapeHtml(recipeTitle)}` : ""}</small></div><span class="resource-tree-quantity">×${escapeHtml(node.quantity)}</span>${showTreeControl}</div>${note}${childHtml}</div>`;
+  }
+
+  function renderResourceTree() {
+    els.resourceTreeList.innerHTML = state.tree
+      ? resourceTreeNodeHtml(state.tree)
+      : `<div class="empty-state compact"><strong>No recipe tree yet</strong><span>Build a recipe tree to browse item requirements by recipe.</span></div>`;
   }
 
   function renderResources() {
+    updateResourceProgress();
+    renderResourceTree();
     if (!state.resources.length) {
       els.resourceCaption.textContent = "Expand a recipe tree to calculate its raw ingredients.";
       els.resourceList.innerHTML = `<div class="empty-state compact"><span class="empty-symbol" aria-hidden="true">▤</span><strong>No totals yet</strong><span>Build a recipe tree to see the items you need, including recipes you have not expanded.</span></div>`;
@@ -694,9 +787,12 @@
     }
     const partial = state.resourcesComplete ? "" : " · partial, expand more branches";
     els.resourceCaption.textContent = `${state.resources.length.toLocaleString()} needed items for ${itemName(state.tree.key)}${partial}${state.treeTruncated ? " · tree is capped" : ""}`;
-    els.resourceList.innerHTML = state.resources.map(([key, amount, status]) =>
-      `<div class="resource-row">${itemIcon(key)}<div class="resource-name">${escapeHtml(itemName(key))}<div class="resource-id">${escapeHtml(itemId(key))} · ${escapeHtml(status)}</div></div><span class="resource-amount">×${escapeHtml(amount)}</span></div>`
-    ).join("");
+    els.resourceList.innerHTML = state.resources.map(([key, amount, status]) => {
+      const needed = Math.max(0, Number(amount) || 0);
+      const collected = Math.min(needed, Math.max(0, Number(state.collectedResources.get(key)) || 0));
+      const complete = collected >= needed;
+      return `<div class="resource-row ${complete ? "is-complete" : ""}"><input class="resource-check" type="checkbox" data-resource-check="${escapeHtml(key)}" aria-label="Mark ${escapeHtml(itemName(key))} fully acquired" ${complete ? "checked" : ""}>${itemIcon(key)}<div class="resource-name">${escapeHtml(itemName(key))}<div class="resource-id">${escapeHtml(itemId(key))} · ${escapeHtml(status)}</div></div><label class="resource-collected"><span class="sr-only">Collected amount of ${escapeHtml(itemName(key))}</span><input class="resource-collected-input" type="number" min="0" max="${escapeHtml(needed)}" step="1" value="${escapeHtml(collected)}" data-collected-key="${escapeHtml(key)}" aria-label="Collected ${escapeHtml(itemName(key))}; ${escapeHtml(needed)} needed"><span aria-hidden="true">/ ${escapeHtml(needed)}</span></label></div>`;
+    }).join("");
   }
 
   function exportResources() {
@@ -846,6 +942,47 @@
       } catch (error) {
         showNotice(`Could not switch recipe: ${error.message}`, true);
       }
+    });
+    els.resourceTreeList.addEventListener("change", async (event) => {
+      const checkbox = event.target.closest("[data-show-tree-node]");
+      if (!checkbox) return;
+      const node = findTreeNode(state.tree, Number(checkbox.dataset.showTreeNode));
+      if (!node) return;
+      const wasExpanded = node.expanded;
+      try {
+        if (checkbox.checked) await expandNode(node, true);
+        else {
+          node.expanded = false;
+          node.children = null;
+        }
+        recalculateTree(state.tree);
+        state.treeNodes = allNodes(state.tree).length;
+        renderTree();
+        updateResources();
+        renderResources();
+        showNotice("");
+      } catch (error) {
+        node.expanded = wasExpanded;
+        if (!wasExpanded) node.children = null;
+        showNotice(`Could not update recipe breakdown: ${error.message}`, true);
+        renderResources();
+      }
+    });
+    els.resourceList.addEventListener("change", (event) => {
+      const checkbox = event.target.closest("[data-resource-check]");
+      const input = event.target.closest("[data-collected-key]");
+      if (!checkbox && !input) return;
+      const key = checkbox ? checkbox.dataset.resourceCheck : input.dataset.collectedKey;
+      const resource = state.resources.find(([resourceKey]) => resourceKey === key);
+      if (!resource) return;
+      const needed = Number(resource[1]);
+      const amount = checkbox ? (checkbox.checked ? needed : 0) : Number(input.value);
+      if (!Number.isSafeInteger(amount) || amount < 0 || amount > needed) {
+        showNotice(`Enter a whole number from 0 to ${needed} for ${itemName(key)}.`, true);
+        renderResources();
+        return;
+      }
+      setCollectedAmount(key, amount);
     });
     els.expandTree.addEventListener("click", expandAll);
     els.collapseTree.addEventListener("click", collapseAll);
