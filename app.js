@@ -28,6 +28,7 @@
     tree: null,
     treeNodes: 0,
     nodeSequence: 0,
+    recipeOverrides: new Map(),
     resourceKeys: new Set(),
     treeTruncated: false,
     resources: [],
@@ -416,7 +417,7 @@
   }
 
   function makeTreeNode(key, quantity, ref, ancestors, depth) {
-    return { id: ++state.nodeSequence, key, quantity, ref, ancestors: new Set(ancestors), depth, children: null, recipe: null, refs: null, expanded: false, asResource: state.resourceKeys.has(key) };
+    return { id: ++state.nodeSequence, key, quantity, ref: ref || state.recipeOverrides.get(key) || null, ancestors: new Set(ancestors), depth, children: null, recipe: null, refs: null, expanded: false, asResource: state.resourceKeys.has(key) };
   }
 
   async function loadNodeRecipe(node) {
@@ -426,8 +427,11 @@
       node.refs = refs[node.key] || [];
     }
     if (!node.refs.length) return null;
-    if (!node.ref || !node.refs.some(([category, index]) => category === node.ref[0] && index === node.ref[1])) {
+    const preferredRef = state.recipeOverrides.get(node.key) || node.ref;
+    if (!preferredRef || !node.refs.some(([category, index]) => category === preferredRef[0] && index === preferredRef[1])) {
       node.ref = node.refs[0];
+    } else {
+      node.ref = preferredRef;
     }
     node.recipe = await loadChunk(node.ref[0], node.ref[1]);
     return node.recipe;
@@ -475,6 +479,7 @@
 
   async function buildTree(key, ref) {
     closePanel();
+    state.recipeOverrides = new Map([[key, ref]]);
     state.tree = makeTreeNode(key, 1, ref, new Set(), 0);
     state.resourceKeys = new Set();
     state.tree.asResource = false;
@@ -502,10 +507,11 @@
     const hasRecipes = loadedRefs.length > 0;
     const cyclic = node.ancestors.has(node.key);
     const canExpand = !node.asResource && !cyclic && node.depth < MAX_TREE_DEPTH && (hasRecipes || node.children !== null);
+    const preferredRef = state.recipeOverrides.get(node.key) || node.ref;
     const recipeOptions = !node.asResource && loadedRefs.length > 1
-      ? `<select class="tree-recipe-select" aria-label="Choose recipe">${loadedRefs.map((ref, index) => {
+      ? `<select class="tree-recipe-select" aria-label="Choose recipe for every ${escapeHtml(itemName(node.key))} occurrence in this tree" title="Applies to every ${escapeHtml(itemName(node.key))} occurrence in this tree">${loadedRefs.map((ref, index) => {
         const category = state.categoryByIndex[ref[0]];
-        const selected = node.ref && ref[0] === node.ref[0] && ref[1] === node.ref[1];
+        const selected = preferredRef && ref[0] === preferredRef[0] && ref[1] === preferredRef[1];
         return `<option value="${ref[0]}:${ref[1]}" ${selected ? "selected" : ""}>${escapeHtml(category?.title || "Recipe")} · ${index + 1}</option>`;
       }).join("")}</select>` : "";
     const alternativeOptions = !node.asResource && node.alternatives?.length > 1
@@ -523,7 +529,10 @@
     const resourceToggle = hasRecipes
       ? `<button class="tree-resource-toggle ${node.asResource ? "selected" : ""}" type="button" data-resource-node="${node.id}" aria-pressed="${node.asResource}" title="${node.asResource ? "Expand this item’s recipe throughout the tree" : "Count every occurrence as a resource without expanding its recipe"}">${node.asResource ? "Use recipe" : "Make resource"}</button>`
       : "";
-    return `<div class="tree-node" data-node-id="${node.id}"><div class="tree-row"><button class="tree-toggle" type="button" aria-label="${node.expanded ? "Collapse" : "Expand"} ${escapeHtml(itemName(node.key))}" ${canExpand ? "" : "disabled"}>${node.expanded ? "−" : "+"}</button>${icon}<span class="tree-item-name">${escapeHtml(itemName(node.key))}<small>${escapeHtml(itemId(node.key))}</small></span><span class="tree-quantity">×${escapeHtml(node.quantity)}</span>${alternativeOptions}${recipeOptions}${resourceToggle}</div>${note}${children.length ? `<div class="tree-children">${childHtml}</div>` : ""}</div>`;
+    const quantityDisplay = node.depth === 0
+      ? `<label class="tree-quantity tree-root-quantity">×<input class="tree-quantity-input" type="number" min="1" step="1" inputmode="numeric" value="${escapeHtml(node.quantity)}" aria-label="Amount of ${escapeHtml(itemName(node.key))} to craft"></label>`
+      : `<span class="tree-quantity">×${escapeHtml(node.quantity)}</span>`;
+    return `<div class="tree-node" data-node-id="${node.id}"><div class="tree-row"><button class="tree-toggle" type="button" aria-label="${node.expanded ? "Collapse" : "Expand"} ${escapeHtml(itemName(node.key))}" ${canExpand ? "" : "disabled"}>${node.expanded ? "−" : "+"}</button>${icon}<span class="tree-item-name">${escapeHtml(itemName(node.key))}<small>${escapeHtml(itemId(node.key))}</small></span>${quantityDisplay}${alternativeOptions}${recipeOptions}${resourceToggle}</div>${note}${children.length ? `<div class="tree-children">${childHtml}</div>` : ""}</div>`;
   }
 
   function renderTree() {
@@ -574,11 +583,22 @@
   }
 
   async function selectNodeRecipe(node, ref) {
-    node.ref = ref;
-    node.recipe = null;
-    node.children = null;
-    node.expanded = false;
-    await expandNode(node);
+    state.recipeOverrides.set(node.key, ref);
+    const matchingNodes = allNodes(state.tree).filter((entry) => entry.key === node.key);
+    const expandedNodeIds = new Set(matchingNodes.filter((entry) => entry.expanded).map((entry) => entry.id));
+    expandedNodeIds.add(node.id);
+    for (const matchingNode of matchingNodes) {
+      matchingNode.ref = ref;
+      matchingNode.recipe = null;
+      matchingNode.children = null;
+      matchingNode.expanded = false;
+    }
+    state.treeNodes = allNodes(state.tree).length;
+    for (const matchingNode of allNodes(state.tree).filter((entry) => entry.key === node.key)) {
+      if (expandedNodeIds.has(matchingNode.id) && !matchingNode.asResource) {
+        await expandNode(matchingNode, true);
+      }
+    }
     recalculateTree(state.tree);
     state.treeNodes = allNodes(state.tree).length;
     renderTree();
@@ -782,6 +802,21 @@
       }
     });
     els.treeRoot.addEventListener("change", async (event) => {
+      const quantityInput = event.target.closest(".tree-quantity-input");
+      if (quantityInput) {
+        const quantity = Number(quantityInput.value);
+        if (!Number.isSafeInteger(quantity) || quantity < 1) {
+          showNotice("Enter a positive whole number for the main item.", true);
+          renderTree();
+          return;
+        }
+        state.tree.quantity = quantity;
+        recalculateTree(state.tree);
+        renderTree();
+        updateResources();
+        showNotice("");
+        return;
+      }
       const alternative = event.target.closest(".tree-alt-select");
       if (alternative) {
         const element = alternative.closest(".tree-node");

@@ -112,6 +112,9 @@ h1 { margin: 0 0 5px; font-size: 19px; font-weight: 700; letter-spacing: -.25px;
 .tree-item-name { min-width: 0; flex: 1; font-size: 12px; font-weight: 650; }
 .tree-item-name small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; font-weight: 400; }
 .tree-quantity { color: var(--green); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tree-root-quantity { display: inline-flex; align-items: center; gap: 5px; }
+.tree-quantity-input { width: 64px; min-height: 30px; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-raised); color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; text-align: center; }
+.tree-quantity-input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
 .tree-recipe-select, .tree-alt-select { max-width: 190px; min-height: 29px; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-raised); color: var(--muted); font-size: 10px; }
 .tree-resource-toggle { min-height: 29px; padding: 0 8px; border: 1px solid #3b5745; border-radius: 5px; background: #1c2b21; color: var(--green); cursor: pointer; font-size: 10px; white-space: nowrap; }
 .tree-resource-toggle:hover, .tree-resource-toggle.selected { border-color: var(--green); background: #24402d; }
