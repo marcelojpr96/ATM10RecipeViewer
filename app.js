@@ -12,6 +12,8 @@
   const FAVORITES_STORAGE_KEY = "recipe-tree:favorites:v1";
   const THEME_STORAGE_KEY = "recipe-tree:theme:v1";
   const COLLECTED_RESOURCES_STORAGE_KEY = "recipe-tree:collected-resources:v1";
+  const PROCESSING_STORAGE_KEY = "atm10-compendium:processing:v1";
+  const NAVIGATION_STATE_KEY = "atm10-compendium";
   const MAIN_ITEM_COLLECTED_PREFIX = "main:";
   const $ = (selector) => document.querySelector(selector);
 
@@ -24,6 +26,9 @@
     itemByKey: new Map(),
     favorites: new Set(),
     collectedResources: new Map(),
+    baseCollectedResources: new Map(),
+    processingCards: [],
+    activeProcessingId: null,
     theme: "dark",
     recipeRefs: null,
     ingredientRefs: new Map(),
@@ -84,6 +89,8 @@
     resourceProgressBar: $("#resource-progress-bar"),
     resourceProgressFill: $("#resource-progress-fill"),
     exportResources: $("#export-resources"),
+    saveProcessing: $("#save-processing"),
+    processingList: $("#processing-list"),
     catalogTitle: $("#catalog-title"),
     favoritesCount: $("#favorites-count"),
     mobSearch: $("#mob-search-input"),
@@ -146,11 +153,34 @@
     els.settingsMenu.hidden = false;
   }
 
-  function setPage(page) {
+  function navigationState() {
+    return {
+      app: NAVIGATION_STATE_KEY,
+      page: state.page,
+      view: state.view,
+      selectedItem: state.selectedItem,
+      selectedMob: state.selectedMob
+    };
+  }
+
+  function pushNavigationState() {
+    window.history.pushState(navigationState(), "");
+  }
+
+  function replaceNavigationState() {
+    window.history.replaceState(navigationState(), "");
+  }
+
+  function setPage(page, recordHistory = true) {
     if (page === "settings") {
       openSettings();
       return;
     }
+    if (page === "items") {
+      setView("items", recordHistory);
+      return;
+    }
+    const shouldRecordHistory = recordHistory && state.page !== page;
     if (state.page !== page) closePanel();
     state.page = page;
     document.querySelectorAll(".page-view").forEach((section) => {
@@ -158,16 +188,14 @@
     });
     els.sectionTabs.hidden = page !== "items";
     closeMainNav();
-    if (page === "items") {
-      setView("items");
-    } else if (page === "mobs") {
-      renderMobs(true);
-    } else if (page === "home") {
-      renderHomeCarousels();
-    }
+    if (page === "mobs") renderMobs(true);
+    else if (page === "home") renderHomeCarousels();
+    if (shouldRecordHistory) pushNavigationState();
   }
 
-  function setView(view) {
+  function setView(view, recordHistory = true) {
+    const shouldRecordHistory = recordHistory &&
+      (state.page !== "items" || state.view !== view || state.selectedItem || state.selectedMob);
     if (state.page !== "items") closePanel();
     state.page = "items";
     state.view = view;
@@ -186,6 +214,41 @@
     });
     if (view === "resources") renderResources();
     if (view === "items" || view === "favorites") renderItems(true);
+    if (view === "processing") renderProcessingCards();
+    if (shouldRecordHistory) pushNavigationState();
+  }
+
+  function restoreNavigationState(navigation) {
+    closePanel();
+    const page = ["home", "items", "mobs"].includes(navigation.page) ? navigation.page : "home";
+    if (page === "items") {
+      setPage("items", false);
+      const view = ["items", "favorites", "tree", "resources", "processing"].includes(navigation.view)
+        ? navigation.view
+        : "items";
+      setView(view, false);
+    } else {
+      setPage(page, false);
+    }
+    if (navigation.selectedItem && state.itemByKey.has(navigation.selectedItem)) {
+      openItem(navigation.selectedItem, false);
+    } else if (navigation.selectedMob) {
+      openMob(navigation.selectedMob, false);
+    }
+    els.settingsMenu.hidden = true;
+    closeMainNav();
+  }
+
+  function closePanelWithHistory() {
+    const navigation = window.history.state;
+    const panelMatchesRoute = navigation?.app === NAVIGATION_STATE_KEY &&
+      (navigation.selectedItem === state.selectedItem || navigation.selectedMob === state.selectedMob);
+    if ((state.selectedItem || state.selectedMob) && panelMatchesRoute) {
+      window.history.back();
+      return;
+    }
+    closePanel();
+    replaceNavigationState();
   }
 
   function updateFavoritesCount() {
@@ -231,8 +294,90 @@
       showNotice(`Could not load saved resource progress: ${error.message}`, true);
       state.collectedResources.clear();
     }
+    state.baseCollectedResources = new Map(state.collectedResources);
+    loadSavedProcessingCards();
     applyTheme(theme, false);
     updateFavoritesCount();
+  }
+
+  function isRecipeReference(ref) {
+    return Array.isArray(ref) && ref.length === 2 &&
+      ref.every((value) => Number.isSafeInteger(value) && value >= 0);
+  }
+
+  function validateProcessingNode(node, depth, counter) {
+    counter.value++;
+    if (!node || typeof node !== "object" || typeof node.key !== "string" ||
+        !state.itemByKey.has(node.key) || !Number.isSafeInteger(node.quantity) || node.quantity < 1 ||
+        depth > MAX_TREE_DEPTH || counter.value > MAX_TREE_NODES ||
+        (node.ref !== null && !isRecipeReference(node.ref)) ||
+        typeof node.expanded !== "boolean" || typeof node.asResource !== "boolean" ||
+        (node.asResource && node.expanded) ||
+        (node.groupIndex !== null && (!Number.isSafeInteger(node.groupIndex) || node.groupIndex < 0)) ||
+        (node.children !== null && !Array.isArray(node.children)) ||
+        (node.expanded && !Array.isArray(node.children))) {
+      throw new Error("A saved processing card contains an invalid recipe tree.");
+    }
+    for (const child of node.children || []) validateProcessingNode(child, depth + 1, counter);
+  }
+
+  function validateSavedProgress(progress) {
+    if (!progress || typeof progress !== "object" || Array.isArray(progress)) {
+      throw new Error("Saved card progress must be an item-to-amount map.");
+    }
+    const entries = Object.entries(progress);
+    if (entries.some(([key, amount]) => {
+      const itemKey = key.startsWith(MAIN_ITEM_COLLECTED_PREFIX)
+        ? key.slice(MAIN_ITEM_COLLECTED_PREFIX.length)
+        : key;
+      return !state.itemByKey.has(itemKey) || !Number.isSafeInteger(amount) || amount < 0;
+    })) {
+      throw new Error("A saved card contains invalid collection progress.");
+    }
+    return Object.fromEntries(entries.filter(([, amount]) => amount > 0));
+  }
+
+  function validateProcessingCard(card) {
+    if (!card || typeof card !== "object" || typeof card.id !== "string" ||
+        !card.id || typeof card.rootKey !== "string" || !state.itemByKey.has(card.rootKey) ||
+        !card.tree || card.tree.key !== card.rootKey ||
+        !Array.isArray(card.recipeOverrides) ||
+        card.recipeOverrides.some(([key, ref]) =>
+          typeof key !== "string" || !state.itemByKey.has(key) || !isRecipeReference(ref)) ||
+        !Array.isArray(card.resources) ||
+        card.resources.some((resource) =>
+          !Array.isArray(resource) || resource.length !== 4 ||
+          typeof resource[0] !== "string" || !state.itemByKey.has(resource[0]) ||
+          !Number.isSafeInteger(resource[1]) || resource[1] < 0 ||
+          typeof resource[2] !== "string" || typeof resource[3] !== "string" ||
+          !state.itemByKey.has(resource[3].startsWith(MAIN_ITEM_COLLECTED_PREFIX)
+            ? resource[3].slice(MAIN_ITEM_COLLECTED_PREFIX.length)
+            : resource[3])) ||
+        typeof card.resourceTreeCollapsed !== "boolean" ||
+        typeof card.treeTruncated !== "boolean" || !Number.isSafeInteger(card.updatedAt)) {
+      throw new Error("Saved Processing data has an invalid card.");
+    }
+    validateProcessingNode(card.tree, 0, { value: 0 });
+    return {
+      ...card,
+      progress: validateSavedProgress(card.progress)
+    };
+  }
+
+  function loadSavedProcessingCards() {
+    try {
+      const saved = localStorage.getItem(PROCESSING_STORAGE_KEY);
+      if (!saved) return;
+      const data = JSON.parse(saved);
+      if (data?.format !== "atm10-compendium-processing" || data.version !== 1 ||
+          !Array.isArray(data.cards)) {
+        throw new Error("Saved Processing data has an unsupported format.");
+      }
+      state.processingCards = data.cards.map(validateProcessingCard);
+    } catch (error) {
+      state.processingCards = [];
+      showNotice(`Could not load saved Processing cards: ${error.message}`, true);
+    }
   }
 
   function applyTheme(theme, persist = true) {
@@ -299,7 +444,7 @@
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = "recipe-tree-favorites.json";
+    link.download = "atm-10-8.5-compendium-favorites.json";
     document.body.append(link);
     link.click();
     link.remove();
@@ -311,7 +456,7 @@
       const data = JSON.parse(await file.text());
       if (data?.format !== "recipe-tree-favorites" || data.version !== 1 ||
           !Array.isArray(data.items) || data.items.some((key) => typeof key !== "string")) {
-        throw new Error("Choose a Recipe Tree favorites JSON file.");
+        throw new Error("Choose an ATM 10 8.5 Compendium favorites JSON file.");
       }
       const imported = new Set(data.items.filter((key) => state.itemByKey.has(key)));
       const previous = state.favorites;
@@ -448,7 +593,7 @@
     $("#home-carousels").replaceChildren(rows);
   }
 
-  function openMob(mobId) {
+  function openMob(mobId, recordHistory = true) {
     const mob = state.mobs.find((entry) => entry.id === mobId);
     if (!mob) return;
     closePanel();
@@ -471,6 +616,7 @@
       : `<p class="panel-empty">No drops were included in this export.</p>`;
     els.details.innerHTML = `<div class="detail-hero mob-detail-hero">${mobSpriteHtml(mob, "detail-mob-sprite")}<div class="detail-title"><h2>${escapeHtml(mob.name)}</h2><p>${escapeHtml(mob.id)}</p><span class="detail-mod">${escapeHtml(modName(mob.mod))}</span></div></div><div class="mob-stats-grid"><div class="mob-stat"><span>Health</span><strong>${escapeHtml(health)}</strong></div><div class="mob-stat"><span>Size</span><strong>${escapeHtml(dimensions)}</strong></div><div class="mob-stat"><span>Category</span><strong>${escapeHtml(mob.category || "Unknown")}</strong></div></div><div class="panel-subheading"><h3>Drops</h3><span>${drops.length.toLocaleString()} listed</span></div><div class="mob-drop-list">${dropRows}</div>`;
     showPanel();
+    if (recordHistory) pushNavigationState();
   }
 
   function renderItems(reset = false) {
@@ -743,8 +889,8 @@
     }
   }
 
-  async function openItem(key) {
-    if (state.page !== "items") setPage("items");
+  async function openItem(key, recordHistory = true) {
+    if (state.page !== "items") setPage("items", false);
     state.selectedMob = null;
     state.selectedItem = key;
     els.panelTitle.textContent = "ITEM DETAILS";
@@ -757,6 +903,7 @@
       : `<span class="detail-mod">${escapeHtml(mod)}</span>`;
     els.details.innerHTML = `<div class="detail-hero">${itemIcon(key, "detail-icon")}<div class="detail-title"><h2>${escapeHtml(name)}</h2><p>${escapeHtml(itemId(key))}</p>${modLabel}</div>${favoriteButtonHtml(key, "favorite-toggle detail-favorite")}</div><div class="panel-subheading recipe-panel-heading"><h3>Recipes</h3><span class="recipe-count">Loading…</span><label class="recipe-type-control"><span>Type</span><select class="recipe-type-filter" aria-label="Filter recipes by type" disabled><option value="">All types</option></select></label></div><div class="recipe-mode-tabs" role="tablist" aria-label="Recipe relationship"><button class="recipe-mode-tab active" type="button" role="tab" aria-selected="true" data-recipe-mode="item">Item</button><button class="recipe-mode-tab" type="button" role="tab" aria-selected="false" data-recipe-mode="ingredient">Ingredient</button></div><div class="recipe-list" role="tabpanel"></div>`;
     showPanel();
+    if (recordHistory) pushNavigationState();
     loadItemRecipes(key, "item");
   }
 
@@ -857,6 +1004,10 @@
 
   async function buildTree(key, ref) {
     closePanel();
+    if (state.activeProcessingId) {
+      state.collectedResources = new Map(state.baseCollectedResources);
+    }
+    state.activeProcessingId = null;
     state.recipeOverrides = new Map([[key, ref]]);
     state.tree = makeTreeNode(key, 1, ref, new Set(), 0);
     state.resourceKeys = new Set();
@@ -1072,6 +1223,9 @@
       !(node.refs || state.recipeRefs?.[node.key] || []).length || node.expanded
     );
     els.exportResources.disabled = state.resources.length === 0;
+    els.saveProcessing.disabled = state.resources.length === 0;
+    els.saveProcessing.textContent = state.activeProcessingId ? "Update Processing card" : "Save to Processing";
+    persistActiveProcessingCard();
     updateResourceProgress();
   }
 
@@ -1104,31 +1258,30 @@
   }
 
   function setCollectedAmount(key, amount) {
-    const previous = state.collectedResources.get(key);
+    const previousCollected = new Map(state.collectedResources);
     if (amount > 0) state.collectedResources.set(key, amount);
     else state.collectedResources.delete(key);
-    let autoMainKey = null;
-    let previousAutoMain;
     const mainItem = state.resources.find(([, , status]) => status === "Main item");
     if (mainItem && key !== mainItem[3] && requiredResourcesCollected()) {
-      autoMainKey = mainItem[3];
-      previousAutoMain = state.collectedResources.get(autoMainKey);
-      if ((Number(previousAutoMain) || 0) < Number(mainItem[1])) {
-        state.collectedResources.set(autoMainKey, Number(mainItem[1]));
-      } else {
-        autoMainKey = null;
+      const currentMainAmount = Number(state.collectedResources.get(mainItem[3])) || 0;
+      if (currentMainAmount < Number(mainItem[1])) {
+        state.collectedResources.set(mainItem[3], Number(mainItem[1]));
       }
     }
-    try {
-      localStorage.setItem(COLLECTED_RESOURCES_STORAGE_KEY, JSON.stringify(Object.fromEntries(state.collectedResources)));
-    } catch (error) {
-      if (previous === undefined) state.collectedResources.delete(key);
-      else state.collectedResources.set(key, previous);
-      if (autoMainKey) {
-        if (previousAutoMain === undefined) state.collectedResources.delete(autoMainKey);
-        else state.collectedResources.set(autoMainKey, previousAutoMain);
+    let saved = false;
+    if (state.activeProcessingId) {
+      saved = persistActiveProcessingCard();
+    } else {
+      try {
+        localStorage.setItem(COLLECTED_RESOURCES_STORAGE_KEY, JSON.stringify(Object.fromEntries(state.collectedResources)));
+        state.baseCollectedResources = new Map(state.collectedResources);
+        saved = true;
+      } catch (error) {
+        showNotice(`Could not save collected resources in this browser: ${error.message}`, true);
       }
-      showNotice(`Could not save collected resources in this browser: ${error.message}`, true);
+    }
+    if (!saved) {
+      state.collectedResources = previousCollected;
       renderResources();
       return;
     }
@@ -1222,6 +1375,189 @@
     const resourcesByKey = new Map(requiredItems.map((resource) => [resource[0], resource]));
     const renderedResources = new Set();
     els.resourceList.innerHTML = `<div class="resource-plan">${resourcePlanNodeHtml(state.tree, mainItem, resourcesByKey, renderedResources)}</div>`;
+    els.saveProcessing.disabled = !state.tree;
+    els.saveProcessing.textContent = state.activeProcessingId ? "Update Processing card" : "Save to Processing";
+  }
+
+  function serializeTreeNode(node) {
+    return {
+      key: node.key,
+      quantity: node.quantity,
+      ref: state.recipeOverrides.get(node.key) || node.ref,
+      groupIndex: node.groupIndex ?? null,
+      expanded: node.expanded,
+      asResource: node.asResource,
+      children: node.children ? node.children.map(serializeTreeNode) : null
+    };
+  }
+
+  function processingCardFromState(id, existingCard = {}) {
+    const trackingKeys = new Set(state.resources.map((resource) => resource[3]));
+    const progress = Object.fromEntries([...state.collectedResources].filter(([key]) => trackingKeys.has(key)));
+    return {
+      ...existingCard,
+      id,
+      rootKey: state.tree.key,
+      tree: serializeTreeNode(state.tree),
+      recipeOverrides: [...state.recipeOverrides],
+      resources: state.resources.map(([key, amount, status, trackingKey = key]) =>
+        [key, amount, status, trackingKey]),
+      progress,
+      resourceTreeCollapsed: state.resourceTreeCollapsed,
+      treeTruncated: state.treeTruncated,
+      updatedAt: Date.now()
+    };
+  }
+
+  function saveProcessingCards() {
+    try {
+      localStorage.setItem(PROCESSING_STORAGE_KEY, JSON.stringify({
+        format: "atm10-compendium-processing",
+        version: 1,
+        cards: state.processingCards
+      }));
+      return true;
+    } catch (error) {
+      showNotice(`Could not save Processing cards in this browser: ${error.message}`, true);
+      return false;
+    }
+  }
+
+  function persistActiveProcessingCard() {
+    if (!state.activeProcessingId || !state.tree) return true;
+    const index = state.processingCards.findIndex((card) => card.id === state.activeProcessingId);
+    if (index < 0) return true;
+    const previousCard = state.processingCards[index];
+    state.processingCards[index] = processingCardFromState(previousCard.id, previousCard);
+    if (!saveProcessingCards()) {
+      state.processingCards[index] = previousCard;
+      return false;
+    }
+    if (state.view === "processing") renderProcessingCards();
+    return true;
+  }
+
+  function saveProcessingCard() {
+    if (!state.tree || !state.resources.length) return;
+    const existingIndex = state.processingCards.findIndex((card) => card.id === state.activeProcessingId);
+    const existingCard = existingIndex >= 0 ? state.processingCards[existingIndex] : null;
+    const id = existingCard?.id || (window.crypto?.randomUUID
+      ? window.crypto.randomUUID()
+      : `processing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const previousCards = state.processingCards;
+    const card = processingCardFromState(id, existingCard || {});
+    state.processingCards = [
+      card,
+      ...state.processingCards.filter((entry) => entry.id !== id)
+    ];
+    if (!saveProcessingCards()) {
+      state.processingCards = previousCards;
+      return;
+    }
+    state.activeProcessingId = id;
+    els.saveProcessing.textContent = "Update Processing card";
+    renderProcessingCards();
+    showNotice(existingCard ? "Processing card updated." : "Recipe tree saved to Processing.");
+  }
+
+  function renderProcessingCards() {
+    if (!state.processingCards.length) {
+      els.processingList.innerHTML = `<div class="empty-state compact"><span class="empty-symbol" aria-hidden="true">▤</span><strong>No saved processing cards</strong><span>Build a recipe tree, open Resources, and save it here to keep working on it later.</span></div>`;
+      return;
+    }
+    els.processingList.innerHTML = state.processingCards.map((card) => {
+      let totalNeeded = 0;
+      let totalCollected = 0;
+      for (const [key, amount, , trackingKey] of card.resources) {
+        const needed = Math.max(0, Number(amount) || 0);
+        totalNeeded += needed;
+        totalCollected += Math.min(needed, Math.max(0, Number(card.progress[trackingKey]) || 0));
+      }
+      const quantity = card.tree.quantity;
+      return `<article class="processing-card"><button class="processing-card-open" type="button" data-processing-open="${escapeHtml(card.id)}" aria-label="Open processing card for ${escapeHtml(itemName(card.rootKey))}"><span class="processing-card-icon-wrap">${itemIcon(card.rootKey, "processing-card-icon")}</span><span class="processing-card-copy"><strong>${escapeHtml(itemName(card.rootKey))}</strong><small>Craft ×${escapeHtml(quantity)} · Updated ${new Date(card.updatedAt).toLocaleDateString()}</small></span><span class="processing-card-progress">${totalCollected.toLocaleString()} / ${totalNeeded.toLocaleString()} collected</span></button><button class="processing-card-remove" type="button" data-processing-remove="${escapeHtml(card.id)}" aria-label="Remove ${escapeHtml(itemName(card.rootKey))} from Processing">Remove</button></article>`;
+    }).join("");
+  }
+
+  async function restoreProcessingNode(snapshot, ancestors = new Set(), depth = 0) {
+    const node = makeTreeNode(snapshot.key, snapshot.quantity, snapshot.ref, ancestors, depth);
+    node.groupIndex = snapshot.groupIndex;
+    node.asResource = snapshot.asResource;
+    if (node.asResource) state.resourceKeys.add(node.key);
+    if (!snapshot.expanded) return node;
+
+    node.expanded = true;
+    const recipe = await loadNodeRecipe(node);
+    node.children = [];
+    if (!recipe) return node;
+    const childAncestors = new Set(node.ancestors);
+    childAncestors.add(node.key);
+    for (const childSnapshot of snapshot.children || []) {
+      const alternatives = recipe.in?.[childSnapshot.groupIndex] || [];
+      if (!alternatives.some(([key]) => key === childSnapshot.key)) {
+        throw new Error(`Saved recipe ingredients no longer match ${itemName(node.key)}.`);
+      }
+      const child = await restoreProcessingNode(childSnapshot, childAncestors, depth + 1);
+      child.alternatives = alternatives;
+      child.parent = node;
+      node.children.push(child);
+    }
+    return node;
+  }
+
+  async function openProcessingCard(id) {
+    const card = state.processingCards.find((entry) => entry.id === id);
+    if (!card) return;
+    const previous = {
+      activeProcessingId: state.activeProcessingId,
+      tree: state.tree,
+      treeNodes: state.treeNodes,
+      nodeSequence: state.nodeSequence,
+      recipeOverrides: state.recipeOverrides,
+      resourceKeys: state.resourceKeys,
+      treeTruncated: state.treeTruncated,
+      resourceTreeCollapsed: state.resourceTreeCollapsed,
+      resources: state.resources,
+      resourcesComplete: state.resourcesComplete,
+      collectedResources: state.collectedResources
+    };
+    state.activeProcessingId = null;
+    state.tree = null;
+    state.treeNodes = 0;
+    state.nodeSequence = 0;
+    state.recipeOverrides = new Map(card.recipeOverrides);
+    state.resourceKeys = new Set();
+    state.treeTruncated = card.treeTruncated;
+    state.resourceTreeCollapsed = card.resourceTreeCollapsed;
+    state.resources = [];
+    state.resourcesComplete = false;
+    state.collectedResources = new Map(Object.entries(card.progress));
+    try {
+      state.tree = await restoreProcessingNode(card.tree);
+      state.treeNodes = allNodes(state.tree).length;
+      recalculateTree(state.tree);
+      state.activeProcessingId = card.id;
+      updateResources();
+      setView("resources");
+      showNotice("");
+    } catch (error) {
+      Object.assign(state, previous);
+      showNotice(`Could not restore this Processing card: ${error.message}`, true);
+      renderProcessingCards();
+    }
+  }
+
+  function removeProcessingCard(id) {
+    const previousCards = state.processingCards;
+    state.processingCards = state.processingCards.filter((card) => card.id !== id);
+    if (!saveProcessingCards()) {
+      state.processingCards = previousCards;
+      return;
+    }
+    if (state.activeProcessingId === id) {
+      state.activeProcessingId = null;
+      state.collectedResources = new Map(state.baseCollectedResources);
+    }
+    renderProcessingCards();
   }
 
   function exportResources() {
@@ -1230,7 +1566,7 @@
     const csv = rows.map((row) => row.map((field) => `"${String(field).replace(/"/g, '""')}"`).join(",")).join("\r\n");
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-    link.download = "recipe-tree-resources.csv";
+    link.download = "atm-10-8.5-compendium-resources.csv";
     document.body.append(link);
     link.click();
     const url = link.href;
@@ -1239,6 +1575,9 @@
   }
 
   function bindEvents() {
+    window.addEventListener("popstate", (event) => {
+      if (event.state?.app === NAVIGATION_STATE_KEY) restoreNavigationState(event.state);
+    });
     const refreshHomeCarousels = () => {
       if (state.page !== "home") return;
       window.clearTimeout(state.homeResizeTimer);
@@ -1249,6 +1588,16 @@
       new ResizeObserver(refreshHomeCarousels).observe(document.documentElement);
     }
     document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => setView(tab.dataset.view)));
+    els.processingList.addEventListener("click", (event) => {
+      const removeButton = event.target.closest("[data-processing-remove]");
+      if (removeButton) {
+        removeProcessingCard(removeButton.dataset.processingRemove);
+        return;
+      }
+      const openButton = event.target.closest("[data-processing-open]");
+      if (openButton) openProcessingCard(openButton.dataset.processingOpen);
+    });
+    els.saveProcessing.addEventListener("click", saveProcessingCard);
     document.querySelector("[data-go-items]").addEventListener("click", () => setPage("items"));
     els.homeButton.addEventListener("click", () => setPage("home"));
     els.navButton.addEventListener("click", () => {
@@ -1327,7 +1676,7 @@
         return;
       }
       if (event.target.closest("[data-close-panel]")) {
-        closePanel();
+        closePanelWithHistory();
         return;
       }
       const button = event.target.closest(".build-tree");
@@ -1477,6 +1826,7 @@
     });
     els.resourceBreakdownToggle.addEventListener("click", () => {
       state.resourceTreeCollapsed = !state.resourceTreeCollapsed;
+      persistActiveProcessingCard();
       renderResources();
     });
     els.expandTree.addEventListener("click", expandAll);
@@ -1504,7 +1854,7 @@
         els.search.focus();
       }
       if (event.key === "Escape") {
-        closePanel();
+        closePanelWithHistory();
         els.settingsMenu.hidden = true;
         closeMainNav();
       }
@@ -1514,6 +1864,7 @@
   async function start() {
     bindEvents();
     try {
+      replaceNavigationState();
       state.catalog = await fetchGzipJson(`${VIEWER_ROOT}catalog.json.gz?v=2`);
       state.categoryByIndex = state.catalog.categories;
       state.items = state.catalog.items;
@@ -1533,7 +1884,7 @@
       els.resultsCount.textContent = `${state.items.length.toLocaleString()} items`;
       renderItems(true);
       renderMobs(true);
-      setPage("home");
+      setPage("home", false);
     } catch (error) {
       showNotice(`Unable to load the prepared JEI export. Run build_viewer.py from the project folder, then open this site through a local web server (for example: python -m http.server 8000). Details: ${error.message}`, true);
       els.resultsCount.textContent = "Export data is not ready";

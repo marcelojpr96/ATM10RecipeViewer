@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#111713">
     <meta name="description" content="A private, locally hosted recipe viewer for your JEI export.">
-    <title>Recipe Tree</title>
-    <link rel="stylesheet" href="./styles.css?v=18">
+    <title>ATM 10 8.5 Compendium</title>
+    <link rel="stylesheet" href="./styles.css?v=19">
   </head>
   <body>
     <header class="topbar">
       <div class="brand-group">
         <button id="nav-button" class="brand-mark nav-button" type="button" aria-label="Open navigation menu" aria-expanded="false" aria-controls="main-nav"><span class="menu-icon" aria-hidden="true"><span></span><span></span><span></span></span></button>
-        <button id="home-button" class="brand" type="button">Recipe<span class="brand-light">Tree</span></button>
+        <button id="home-button" class="brand" type="button">ATM 10 8.5 <span class="brand-light">Compendium</span></button>
       </div>
       <div class="pack-badge" aria-label="Loaded modpack">
         <span class="pack-dot" aria-hidden="true"></span>
@@ -49,6 +49,7 @@
       <button class="tab" data-view="favorites" type="button">Favorites <span id="favorites-count" class="tab-count">0</span></button>
       <button class="tab" data-view="tree" type="button">Recipe tree</button>
       <button class="tab" data-view="resources" type="button">Resources</button>
+      <button class="tab" data-view="processing" type="button">Processing</button>
       <span class="tab-spacer"></span>
       <span class="pack-game" id="minecraft-version"></span>
     </nav>
@@ -62,7 +63,7 @@
           </div>
           <div class="home-center">
             <span class="home-mark" aria-hidden="true">✦</span>
-            <h1>Recipe<span class="brand-light">Tree</span></h1>
+            <h1>ATM 10 8.5 <span class="brand-light">Compendium</span></h1>
             <p>Explore the items, recipes, and creatures in your modpack.</p>
             <div class="home-actions">
               <button class="button primary" type="button" data-page="items">Browse items</button>
@@ -112,6 +113,15 @@
         <div class="load-more-wrap"><button id="load-more" class="button secondary" type="button" hidden>Show more items</button></div>
       </section>
 
+      <section id="processing-view" class="view" hidden>
+        <div class="results-heading">
+          <div><h1>Processing</h1><p>Saved recipe trees and collection progress.</p></div>
+        </div>
+        <div id="processing-list" class="processing-list">
+          <div class="empty-state compact"><span class="empty-symbol" aria-hidden="true">▤</span><strong>No saved processing cards</strong><span>Build a recipe tree, open Resources, and save it here to keep working on it later.</span></div>
+        </div>
+      </section>
+
       <section id="tree-view" class="view" hidden>
         <div class="results-heading tree-heading">
           <div><h1>Recipe tree</h1><p id="tree-caption">Select an item, then choose a recipe to build its ingredient tree.</p></div>
@@ -129,7 +139,10 @@
       <section id="resources-view" class="view" hidden>
         <div class="results-heading">
           <div><h1>Resource totals</h1><p id="resource-caption">Expand a recipe tree to calculate its raw ingredients.</p></div>
-          <button id="export-resources" class="button secondary" type="button" disabled>Export CSV</button>
+          <div class="resource-actions">
+            <button id="save-processing" class="button secondary" type="button" disabled>Save to Processing</button>
+            <button id="export-resources" class="button secondary" type="button" disabled>Export CSV</button>
+          </div>
         </div>
         <div class="resource-progress">
           <div class="resource-progress-heading">
@@ -167,7 +180,7 @@
       </div>
     </aside>
 
-    <footer><span>Recipe Tree</span><span id="footer-counts"></span></footer>
-    <script src="./app.js?v=18" defer></script>
+    <footer><span>ATM 10 8.5 Compendium</span><span id="footer-counts"></span></footer>
+    <script src="./app.js?v=19" defer></script>
   </body>
 </html>
